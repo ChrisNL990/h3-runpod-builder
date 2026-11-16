@@ -1,0 +1,34 @@
+name: Build H3 RunPod image
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set image name
+        run: |
+          owner=$(printf '%s' "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')
+          echo "H3_IMAGE=ghcr.io/$owner/h3-runpod" >> "$GITHUB_ENV"
+      - name: Check Python syntax
+        run: python3 -m py_compile bootstrap.py
+      - name: Log in to GitHub Container Registry
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build image
+        run: docker build --pull -t "$H3_IMAGE:latest" -t "$H3_IMAGE:$GITHUB_SHA" .
+      - name: Check entrypoint without starting services
+        run: |
+          docker image inspect "$H3_IMAGE:latest" --format '{{json .Config.Entrypoint}}'
+          docker run --rm --entrypoint python3.12 "$H3_IMAGE:latest" -c 'import pathlib; p=pathlib.Path("/start.sh"); s=p.read_text(); assert s.count("# Start ComfyUI — keep container alive if it crashes so SSH/Jupyter remain accessible")==1, "Base startup changed"; assert pathlib.Path("/opt/h3-bootstrap/bootstrap.py").is_file(); print("Startup marker and bootstrap verified")'
+      - name: Publish image
+        run: |
+          docker push "$H3_IMAGE:latest"
+          docker push "$H3_IMAGE:$GITHUB_SHA"
+          echo "Container image: $H3_IMAGE:$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+          echo "Clear the RunPod start-command override when using this image." >> "$GITHUB_STEP_SUMMARY"
